@@ -1,25 +1,19 @@
+import { Bytes } from "bytecodec";
 import type { ResourceIdentifier } from "../../helpers/validateIdentifier";
 import {
   packMessage,
+  unpackMessage,
   unpackPatch,
   type ResourceChannelMessage,
 } from "../../helpers/message";
 import { validateIdentifier } from "../../helpers/validateIdentifier";
 import { UUID } from "crypto";
+import { HmacAgent } from "zeyra";
 
 type ResourceChannelChallenge = {
   challengeId: UUID;
   challengePayload: Base64URLString;
 };
-
-export type ResourceChannelMessageCodes =
-  | 1 /** sign -> challenge */
-  | 2 /** patch -> CRDT op */
-  | 3; /** merge -> state */
-
-export type ResourceProxyMessageCodes =
-  | 4 /** verify -> signature */
-  | 5 /** backup  -> state*/;
 
 type ResourceChannelEventMap = {
   "connection-challenged": Set<ResourceChannelChallenge>;
@@ -28,14 +22,9 @@ type ResourceChannelEventMap = {
   "peer-state-recieved": Set<ResourceChannelMessage>;
 };
 
-export type ResourceChannelMessage = {
-  type: ResourceChannelMessageType;
-  identifier: Base64URLString;
-  envelope: unknown;
-};
-
 export class ResourceChannel {
   private readonly url: `/api/v1/resource/${ResourceIdentifier}`;
+  private readonly hmacSecret: JsonWebKey;
   private broadcastChannel: BroadcastChannel | null = null;
   private webSocket: WebSocket | null = null;
   private isLeader: boolean = false;
@@ -45,10 +34,11 @@ export class ResourceChannel {
     ) => void;
   } = {};
 
-  constructor(identifier: string) {
+  constructor(identifier: string, hmacSecret: JsonWebKey) {
     const validatedIdentifier = validateIdentifier(identifier);
 
     this.url = `/api/v1/resource/${validatedIdentifier}`;
+    this.hmacSecret = hmacSecret;
 
     const channelName = ResourceChannel.channelName(this.url);
     const lockName = ResourceChannel.lockName(this.url);
@@ -81,17 +71,26 @@ export class ResourceChannel {
 
             this.#isLeader = true;
             const webSocket = new WebSocket(this.url);
-            this.#ws = webSocket;
+            this.webSocket = webSocket;
 
-            webSocket.onopen = (socket: WebSocket, ev: Event) => {
-              /**  */
-            };
-
-            webSocket.onmessage = (event: MessageEvent<unknown>) => {
+            webSocket.onmessage = async (event: MessageEvent<ArrayBuffer>) => {
               const deliver = async () => {
-                const message = await ResourceChannel.#toMessage(event.data);
+                const message = unpackMessage(event.data);
                 if (!message) return;
 
+                if (message.code === 1) {
+                  const signer = new HmacAgent(this.hmacSecret);
+                  const signature = await signer.sign(
+                    Bytes.toBufferSource(
+                      Bytes.fromBase64UrlString(message.payload.challenge)
+                    )
+                  );
+                  const upstream = packMessage({
+                    code: 5,
+                    payload: { signature },
+                  });
+                  this.webSocket.send(upstream);
+                }
                 this.#onmessage(message);
                 this.#bc.postMessage(message);
               };
@@ -99,7 +98,7 @@ export class ResourceChannel {
             };
 
             webSocket.onclose = () => {
-              if (this.#ws === webSocket) this.#ws = null;
+              if (this.webSocket === webSocket) this.webSocket = null;
             };
 
             await new Promise<void>((resolve) => {
@@ -109,7 +108,7 @@ export class ResourceChannel {
             });
 
             this.#isLeader = false;
-            if (this.#ws === webSocket) this.#ws = null;
+            if (this.webSocket === webSocket) this.webSocket = null;
           }
         );
 
@@ -125,7 +124,7 @@ export class ResourceChannel {
     this.#bc.postMessage(message);
 
     if (!this.#isLeader) return;
-    const webSocket = this.#ws;
+    const webSocket = this.webSocket;
     if (!webSocket || webSocket.readyState !== WebSocket.OPEN) return;
 
     ResourceChannel.#sendWebSocket(webSocket, message);

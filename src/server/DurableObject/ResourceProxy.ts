@@ -4,6 +4,7 @@ import { generateNonce } from "bytecodec";
 import { DurableObject } from "cloudflare:workers";
 import { HmacAgent } from "zeyra";
 import { Bytes } from "bytecodec";
+import { packMessage, unpackMessage } from "../../helpers/message";
 export class ResourceProxy extends DurableObject<Env> {
   private identifier = "";
   private backup: ArrayBuffer | undefined = undefined;
@@ -33,12 +34,16 @@ export class ResourceProxy extends DurableObject<Env> {
       this.secret = secret;
 
       this.backup = await this.env.PRIVATE_BUCKET.get(this.identifier);
-      this.ctx.waitUntil(this.challenge(serverWebSocket));
+      this.ctx.waitUntil(this.webSocketChallenge(serverWebSocket));
     }
     return new Response(null, { status: 101, webSocket: clientWebSocket });
   }
 
-  async webSocketMessage(sender: WebSocket, message: ArrayBuffer) {
+  async webSocketMessage(sender: WebSocket, messageBuffer: ArrayBuffer) {
+    const message = unpackMessage(messageBuffer);
+    if (message.code === 5) {
+      this.webSocketVerify(sender, message.payload.signature);
+    }
     if (this.verifiedSockets.has(sender)) {
       for (const socket of this.ctx.getWebSockets()) {
         if (socket !== sender && this.verifiedSockets.has(socket)) {
@@ -55,18 +60,13 @@ export class ResourceProxy extends DurableObject<Env> {
   async webSocketChallenge(socket: WebSocket) {
     const challenge = generateNonce();
     this.challenges.set(socket, challenge);
-    const messageObject = {
-      code: 1,
-      payload: {
-        challenge,
-      },
-    };
-    socket.send();
+    const message = packMessage({ code: 1, payload: { challenge } });
+    socket.send(message);
   }
 
   async webSocketVerify(
     socket: WebSocket,
-    signature: ArrayBuffer
+    signature: BufferSource
   ): Promise<void> {
     const challenge = this.challenges.get(socket);
     if (!challenge) return socket.close(1008, "verification failed");
@@ -78,6 +78,8 @@ export class ResourceProxy extends DurableObject<Env> {
     const verified = await verifier.verify(challengeBytes, signature);
     if (!verified) return socket.close(1008, "verification failed");
     this.verifiedSockets.add(socket);
+    const downStream = packMessage({ code: 3, payload: this.backup });
+    socket.send();
   }
 
   async resourceBackup(backup: ArrayBuffer) {}

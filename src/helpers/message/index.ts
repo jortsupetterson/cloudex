@@ -1,60 +1,111 @@
 import { Bytes } from "bytecodec";
-import { validateIdentifier } from "../validateIdentifier";
 import { encode, decode } from "@msgpack/msgpack";
+import { validateIdentifier } from "../validateIdentifier";
+
+type BytePayload = BufferSource;
 
 type ChallengeMessage = { code: 1; payload: { challenge: Base64URLString } };
-type PatchPayload = {
+type PatchMessage = {
   code: 2;
-  payload: {
-    patch: ArrayBuffer;
-  };
+  payload: { iv: Uint8Array; ciphertext: ArrayBuffer } | ArrayBuffer;
 };
-type MergePayload = {
+type MergeMessage = {
   code: 3;
-  payload: {
-    state: ArrayBuffer;
-  };
+  payload: { iv: Uint8Array; ciphertext: ArrayBuffer } | ArrayBuffer;
 };
-type BackupPayload = {
+type BackupMessage = {
   code: 4;
-  payload: {
-    identifier: Base64URLString;
-    envelope: unknown;
-  };
+  payload:
+    | {
+        identifier: Base64URLString;
+        envelope: { iv: Uint8Array; ciphertext: ArrayBuffer };
+      }
+    | ArrayBuffer;
 };
+type SignatureMessage = { code: 5; payload: { signature: BytePayload } };
 
-type ResourceMessageObject = ChallengeMessage | PatchPayload | MergePayload;
-const IDENTIFIER_BYTES = 32;
+export type ResourceMessageObject =
+  | ChallengeMessage
+  | PatchMessage
+  | MergeMessage
+  | BackupMessage
+  | SignatureMessage;
+
+const CODE_BYTES = 1;
 
 export function packMessage(
-  messageObject: ResourceChannelMessage
-): ArrayBuffer {
-  const validIdentifier = validateIdentifier(messageObject.identifier);
-  const identifierBytes = Bytes.fromBase64UrlString(validIdentifier);
-  if (identifierBytes.byteLength !== IDENTIFIER_BYTES) {
-    throw new TypeError("identifier must decode to 32 bytes");
-  }
+  messageObject: ResourceMessageObject
+): ArrayBufferLike {
+  const codeByte = Uint8Array.of(messageObject.code);
 
-  const envelopeBytes = encode(messageObject.envelope);
-  const out = new Uint8Array(IDENTIFIER_BYTES + envelopeBytes.byteLength);
-  out.set(identifierBytes, 0);
-  out.set(envelopeBytes, IDENTIFIER_BYTES);
-  return out.buffer;
+  switch (messageObject.code) {
+    case 1: {
+      const challengeBytes = Bytes.fromBase64UrlString(
+        messageObject.payload.challenge
+      );
+      return Bytes.concat([codeByte, challengeBytes]).buffer;
+    }
+
+    case 2: {
+      return Bytes.concat([codeByte, encode(messageObject.payload)]).buffer;
+    }
+
+    case 3: {
+      return Bytes.concat([codeByte, encode(messageObject.payload)]).buffer;
+    }
+
+    case 4: {
+      validateIdentifier(messageObject.payload.identifier);
+      return Bytes.concat([codeByte, encode(messageObject.payload)]).buffer;
+    }
+
+    case 5: {
+      return Bytes.concat([codeByte, encode(messageObject.payload)]).buffer;
+    }
+  }
 }
 
-export function unpackPatch(messageBuffer: ArrayBuffer): {
-  identifier: Base64URLString;
-  envelope: unknown;
-} {
-  if (message.byteLength < IDENTIFIER_BYTES)
-    throw new TypeError("message too short");
-  const view = new Uint8Array(message);
+export function unpackMessage(
+  messageBuffer: ArrayBuffer
+): ResourceMessageObject {
+  const bytes = Bytes.toUint8Array(messageBuffer);
+  if (bytes.byteLength < CODE_BYTES) throw new TypeError("message too short");
 
-  const identifierBytes = view.subarray(0, IDENTIFIER_BYTES);
-  const envelopeBytes = view.subarray(IDENTIFIER_BYTES);
+  const code = bytes[0];
+  const payloadBytes = bytes.slice(CODE_BYTES);
 
-  return {
-    identifier: Bytes.toBase64UrlString(identifierBytes),
-    envelope: decode(envelopeBytes) as unknown,
-  };
+  switch (code) {
+    case 1:
+      return {
+        code: 1,
+        payload: { challenge: Bytes.toBase64UrlString(payloadBytes) },
+      };
+
+    case 2:
+      return {
+        code: 2,
+        payload: decode(payloadBytes) as PatchMessage["payload"],
+      };
+
+    case 3:
+      return {
+        code: 3,
+        payload: decode(payloadBytes) as MergeMessage["payload"],
+      };
+
+    case 4: {
+      const payload = decode(payloadBytes) as BackupMessage["payload"];
+      validateIdentifier(payload.identifier);
+      return { code: 4, payload };
+    }
+
+    case 5:
+      return {
+        code: 5,
+        payload: decode(payloadBytes) as SignatureMessage["payload"],
+      };
+
+    default:
+      throw new TypeError(`unknown message code: ${code}`);
+  }
 }
