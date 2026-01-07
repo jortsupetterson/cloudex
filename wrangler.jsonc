@@ -1,41 +1,39 @@
-/**
- * For more details on how to configure Wrangler, refer to:
- * https://developers.cloudflare.com/workers/wrangler/configuration/
- */
 {
-	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "cloudex",
-	"main": "src/index.ts",
-	"compatibility_date": "2026-01-03",
-	"observability": {
-		"enabled": true
-	}
-	/**
-	 * Smart Placement
-	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
-	 */
-	// "placement": {  "mode": "smart" }
-	/**
-	 * Bindings
-	 * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
-	 * databases, object storage, AI inference, real-time communication and more.
-	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
-	 */
-	/**
-	 * Environment Variables
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
-	 * Note: Use secrets to store sensitive data.
-	 * https://developers.cloudflare.com/workers/configuration/secrets/
-	 */
-	// "vars": {  "MY_VARIABLE": "production_value" }
-	/**
-	 * Static Assets
-	 * https://developers.cloudflare.com/workers/static-assets/binding/
-	 */
-	// "assets": {  "directory": "./public/",  "binding": "ASSETS" }
-	/**
-	 * Service Bindings (communicate between multiple Workers)
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
-	 */
-	// "services": [  {   "binding": "MY_SERVICE",   "service": "my-service"  } ]
+  "account_id": "648770119c6d03ac0fe868771cf5df1b",
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cloudex",
+  "main": "./test/server/index.js",
+  "compatibility_date": "2025-12-28",
+  "compliance_region": "public",
+  "observability": { "enabled": true },
+  "placement": { "mode": "smart" },
+  "assets": {
+    "directory": "./test/client",
+    "not_found_handling": "single-page-application"
+  },
+  //====================================
+  //THESE ARE A MUST IN THE PACKAGE
+  "durable_objects": {
+    "bindings": [{ "name": "RESOURCE_PROXY", "class_name": "ResourceProxy" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ResourceProxy"] }],
+  "r2_buckets": [
+    {
+      "binding": "PRIVATE_BUCKET",
+      "bucket_name": "production-private",
+      "preview_bucket_name": "preview-private",
+      "jurisdiction": "eu",
+      "remote": true
+    },
+    {
+      "binding": "PUBLIC_BUCKET",
+      "bucket_name": "production-public",
+      "preview_bucket_name": "preview-public",
+      "jurisdiction": "eu",
+      "remote": true
+    }
+  ],
+  "kv_namespaces": []
+  //THESE ARE A MUST IN THE PACKAGE
+  //=============================================
 }
