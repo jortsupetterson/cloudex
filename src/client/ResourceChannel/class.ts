@@ -3,12 +3,11 @@ import type { ResourceIdentifier } from "../../helpers/validateIdentifier";
 import {
   packMessage,
   unpackMessage,
-  unpackPatch,
   type ResourceChannelMessage,
 } from "../../helpers/message";
 import { validateIdentifier } from "../../helpers/validateIdentifier";
 import { UUID } from "crypto";
-import { HmacAgent } from "zeyra";
+import { HmacAgent, HmacCluster } from "zeyra";
 
 type ResourceChannelChallenge = {
   challengeId: UUID;
@@ -24,7 +23,7 @@ type ResourceChannelEventMap = {
 
 export class ResourceChannel {
   private readonly url: `/api/v1/resource/${ResourceIdentifier}`;
-  private readonly hmacSecret: JsonWebKey;
+  private readonly hmacJwk: JsonWebKey;
   private broadcastChannel: BroadcastChannel | null = null;
   private webSocket: WebSocket | null = null;
   private isLeader: boolean = false;
@@ -34,11 +33,11 @@ export class ResourceChannel {
     ) => void;
   } = {};
 
-  constructor(identifier: string, hmacSecret: JsonWebKey) {
+  constructor(identifier: string, hmacJwk: JsonWebKey) {
     const validatedIdentifier = validateIdentifier(identifier);
 
     this.url = `/api/v1/resource/${validatedIdentifier}`;
-    this.hmacSecret = hmacSecret;
+    this.hmacJwk = hmacJwk;
 
     const channelName = ResourceChannel.channelName(this.url);
     const lockName = ResourceChannel.lockName(this.url);
@@ -69,7 +68,7 @@ export class ResourceChannel {
           async (lockHandle) => {
             if (!lockHandle) return;
 
-            this.#isLeader = true;
+            this.isLeader = true;
             const webSocket = new WebSocket(this.url);
             this.webSocket = webSocket;
 
@@ -79,7 +78,7 @@ export class ResourceChannel {
                 if (!message) return;
 
                 if (message.code === 1) {
-                  const signer = new HmacAgent(this.hmacSecret);
+                  const signer = new HmacAgent(this.hmacJwk);
                   const signature = await signer.sign(
                     Bytes.toBufferSource(
                       Bytes.fromBase64UrlString(message.payload.challenge)
@@ -132,7 +131,9 @@ export class ResourceChannel {
 
   backup(object) {}
 
-  verify(signedChallenge) {}
+  private async sign(challenge: Base64URLString) {
+    const buffer = await HmacCluster.sign(this.hmacJwk, challenge);
+  }
 
   close(): void {
     try {
